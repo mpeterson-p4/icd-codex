@@ -1,7 +1,7 @@
 """preprocess icd-10 hierarchy into a graphical structure that node2vec can use"""
 
 
-from typing import List, Optional
+from typing import List, Dict, Optional
 import warnings
 import tempfile
 import re
@@ -162,18 +162,26 @@ def build_icd10cm_hierarchy_from_zip(
         Tuple[nx.Graph, List[str]]: icd10 hierarchy and ICD-10-CM codes
     """
     codes = []
+    descriptions = {}
     with ZipFile(code_desc_zip_fp) as z:
         (code_desc_fp,) = [
-            n for n in z.namelist() if re.findall(r"icd10cm_codes_\d{4}\.txt$", n)
+            n for n in z.namelist() if re.findall(r"icd10cm_order_\d{4}\.txt$", n)
         ]
         with z.open(code_desc_fp, "r") as f:
             for line in f:
                 if not line.strip():
                     continue  # blank line
-                code, *_ = line.decode().split(" ")
+                
+                line = line.decode()
+                
+                
+                code = line[6:13].rstrip()
+                description = line[77:].rstrip()
+                
                 if 3 < len(code) and "." not in code:
                     code = "{}.{}".format(code[:3], code[3:])
                 codes.append(code)
+                descriptions[code] = {"description": description}
     with ZipFile(code_table_zip_fp) as z:
         (code_table_fp,) = [
             n for n in z.namelist() if re.findall(r"icd10cm_tabular_\d{4}\.xml$", n)
@@ -182,12 +190,13 @@ def build_icd10cm_hierarchy_from_zip(
             e = untangle.parse(f)
     if return_intermediates:
         return build_icd10_hierarchy(e, codes, root_name), e, codes
-    return build_icd10_hierarchy(e, codes, root_name)
+    return build_icd10_hierarchy(e, codes, descriptions, root_name)
 
 
 def build_icd10_hierarchy(
     xml_root: untangle.Element,
     codes: List[str],
+    descriptions: Dict[str, str],
     root_name: Optional[str] = None,
     prune_extra_codes: bool = True,
 ):
@@ -199,6 +208,7 @@ def build_icd10_hierarchy(
     Args:
         xml_root (untangle.Element): root element of the code table XML
         codes (List[str]): list of ICD codes
+        descriptions (Mapping[str,str]): mapping between codes and descriptions
         root_name (str, option): arbitrary name for the root of the hierarchy. Defaults to "root."
         prune_extra_codes (bool): If True, remove any leaf node not specified in `codes`
     Returns:
@@ -230,6 +240,9 @@ def build_icd10_hierarchy(
         codes_ = set(codes)
         G.remove_nodes_from(leaf for leaf in leafs if leaf not in codes_)
     G = nx.algorithms.traversal.breadth_first_search.bfs_tree(G, source=root_name)
+    
+    nx.set_node_attributes(G, descriptions)
+    
     return G, codes
 
 
